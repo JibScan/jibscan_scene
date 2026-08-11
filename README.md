@@ -51,9 +51,11 @@ v0 therefore uses:
 scale = source_subject_distance_m / target_subject_distance_m
 ```
 
-Assumptions: fixed intrinsics, fixed physical dimensions, fixed orientation, no perspective shape change beyond uniform scale, no occlusion change, and no water-optics transformation.
+Assumptions: fixed intrinsics, fixed physical dimensions, no perspective shape change beyond uniform scale, no occlusion change, and no water-optics transformation. Scene Wave 4 adds only deterministic in-plane 2D image rotation; it does not add 3D pose or perspective changes.
 
 Placement uses `SceneState.center_px` as the requested projected squid center in camera pixels. If omitted, it defaults to the camera principal point. Rasterization uses Python's built-in `round` (ties to even) for `round(center_x - width / 2)` and the corresponding y expression, so the rasterized center is within 0.5 px per axis of the requested center. Placement is never clamped or repositioned; out-of-frame pixels are clipped.
+
+`SceneState.orientation_deg > 0` means counter-clockwise in the rendered image, using Pillow's `Image.rotate` convention. Rendering applies the exact order source RGBA raster -> resize to target projected dimensions -> expanded RGBA rotation with transparent fill -> placement by rotated-raster center -> alpha composite on the camera canvas. `target_projected_width_px` and `target_projected_height_px` remain the scaled projected geometry; `rotated_raster_width_px` and `rotated_raster_height_px` record the actual expanded raster footprint. Rotation never changes scale or projected dimensions, and zero degrees preserves the prior pixels and geometry.
 
 ## Run
 
@@ -62,6 +64,7 @@ python -m pip install -e '.[dev]'
 pytest
 python scripts/generate_synthetic_fixture.py
 python scripts/render_range_comparison.py
+python scripts/render_orientation_comparison.py
 ```
 
 The comparison is generated as:
@@ -73,14 +76,16 @@ FAR 6 m | SOURCE 3 m | NEAR 1 m
 
 and written to `artifacts/range_comparison.png`.
 
+The orientation comparison uses the same squid, distance, and center for panels at -45, 0, +45, and +90 degrees. It writes `artifacts/orientation_comparison.png`; its center marker is diagnostic-only and is not part of `RenderedObservation`.
+
 ## Provenance
 
-Every render records source instance ID, source raster and projected dimensions, source range, target range, scale, target projected dimensions, requested `target_center_px`, rasterized `target_top_left_px`, vehicle depth, camera, projection model, and renderer version. The source instance is immutable and is never overwritten by a rendered observation.
+Every render records source instance ID, source raster and projected dimensions, source range, target range, scale, target projected dimensions, orientation, rotated raster dimensions, requested `target_center_px`, post-rotation rasterized `target_top_left_px`, vehicle depth, camera, projection model, and renderer version. The source instance is immutable and is never overwritten by a rendered observation.
 
 ## Known limitations
 
-- scale + translation only;
-- no rotation or pose normalization;
+- scale + translation + deterministic in-plane 2D rotation only;
+- no 3D rotation or pose normalization;
 - no physical squid-size inference;
 - no range estimation;
 - no occlusion model;

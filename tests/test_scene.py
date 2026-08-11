@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
-from jibscan_scene import CameraModel, SceneState, load_normalized_squid_instance, pinhole_range_scale, render_observation
+from jibscan_scene.contracts import TransformationMetadata
+from jibscan_scene import (
+    CameraModel,
+    SceneState,
+    load_normalized_squid_instance,
+    pinhole_range_scale,
+    render_observation,
+)
 
 
 def camera() -> CameraModel:
@@ -37,6 +46,42 @@ def test_pinhole_range_scale_matches_expected_ratios() -> None:
     assert pinhole_range_scale(3.0, 6.0) == 0.5
 
 
+def test_orientation_accepts_finite_values_and_rejects_nonfinite() -> None:
+    scene_camera = camera()
+    assert SceneState(camera=scene_camera, target_distance_m=3.0, orientation_deg=45.0).orientation_deg == 45.0
+    for orientation in (math.nan, math.inf, -math.inf):
+        with pytest.raises(ValueError, match="orientation_deg"):
+            SceneState(camera=scene_camera, target_distance_m=3.0, orientation_deg=orientation)
+
+
+def test_scene_state_preserves_existing_positional_background_argument() -> None:
+    background = (1, 2, 3, 4)
+    scene = SceneState(camera(), 3.0, None, background)
+    assert scene.background_rgba == background
+    assert scene.orientation_deg == 0.0
+
+
+def test_transformation_metadata_preserves_existing_positional_fields() -> None:
+    metadata = TransformationMetadata(
+        "instance",
+        8,
+        16,
+        8,
+        16,
+        3.0,
+        3.0,
+        1.0,
+        8,
+        16,
+        (10.0, 20.0),
+        (6, 12),
+        None,
+        camera(),
+    )
+    assert metadata.target_center_px == (10.0, 20.0)
+    assert metadata.orientation_deg == 0.0
+
+
 def test_rendered_dimensions_follow_uniform_scale(synthetic_manifest: Path) -> None:
     instance = load_normalized_squid_instance(synthetic_manifest)
     expected = {1.0: (384, 768), 3.0: (128, 256), 6.0: (64, 128)}
@@ -52,6 +97,16 @@ def test_default_placement_centers_on_camera_principal_point(synthetic_manifest:
     assert result.transform.target_top_left_px == (448, 322)
 
 
+def test_zero_rotation_preserves_prior_raster_and_projected_geometry(synthetic_manifest: Path) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    result = render_observation(instance, SceneState(camera=camera(), target_distance_m=3.0))
+    with Image.open(instance.image.rgba_path) as source:
+        expected = source.resize((128, 256), resample=Image.Resampling.LANCZOS)
+    x, y = result.transform.target_top_left_px
+    assert result.squid_layer_rgba.crop((x, y, x + 128, y + 256)).tobytes() == expected.tobytes()
+    assert (result.transform.rotated_raster_width_px, result.transform.rotated_raster_height_px) == (128, 256)
+
+
 def test_explicit_center_is_invariant_across_ranges(synthetic_manifest: Path) -> None:
     instance = load_normalized_squid_instance(synthetic_manifest)
     center = (700.25, 120.75)
@@ -65,6 +120,24 @@ def test_explicit_center_is_invariant_across_ranges(synthetic_manifest: Path) ->
     assert [result.transform.target_center_px for result in results] == [center] * 3
 
 
+def test_explicit_center_is_invariant_across_orientations(synthetic_manifest: Path) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    center = (700.25, 120.75)
+    results = [
+        render_observation(
+            instance,
+            SceneState(
+                camera=camera(),
+                target_distance_m=3.0,
+                center_px=center,
+                orientation_deg=orientation,
+            ),
+        )
+        for orientation in (0.0, 45.0, 90.0, -30.0)
+    ]
+    assert [result.transform.target_center_px for result in results] == [center] * 4
+
+
 def test_explicit_center_controls_target_top_left(synthetic_manifest: Path) -> None:
     instance = load_normalized_squid_instance(synthetic_manifest)
     result = render_observation(
@@ -72,6 +145,75 @@ def test_explicit_center_controls_target_top_left(synthetic_manifest: Path) -> N
         SceneState(camera=camera(), target_distance_m=3.0, center_px=(700.25, 120.75)),
     )
     assert result.transform.target_top_left_px == (636, -7)
+
+
+def test_rotation_uses_pillow_expanded_footprint_after_resize(synthetic_manifest: Path) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    result = render_observation(
+        instance,
+        SceneState(camera=camera(), target_distance_m=3.0, orientation_deg=45.0),
+    )
+    with Image.open(instance.image.rgba_path) as source:
+        expected = source.resize((128, 256), resample=Image.Resampling.LANCZOS).rotate(
+            45.0, expand=True, fillcolor=(0, 0, 0, 0)
+        )
+    x, y = result.transform.target_top_left_px
+    assert (result.transform.target_projected_width_px, result.transform.target_projected_height_px) == (128, 256)
+    assert (result.transform.rotated_raster_width_px, result.transform.rotated_raster_height_px) == expected.size
+    assert expected.getchannel("A").getbbox() is not None
+    assert expected.size[0] > 128 and expected.size[1] > 256
+    assert result.squid_layer_rgba.crop((x, y, x + expected.width, y + expected.height)).tobytes() == expected.tobytes()
+
+
+def test_ninety_degree_rotation_swaps_rectangular_raster_footprint(
+    synthetic_manifest: Path,
+) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    result = render_observation(
+        instance,
+        SceneState(camera=camera(), target_distance_m=3.0, orientation_deg=90.0),
+    )
+    assert (result.transform.target_projected_width_px, result.transform.target_projected_height_px) == (128, 256)
+    assert (result.transform.rotated_raster_width_px, result.transform.rotated_raster_height_px) == (256, 128)
+
+
+def test_positive_rotation_is_counter_clockwise_in_rendered_image(
+    synthetic_manifest: Path, tmp_path: Path
+) -> None:
+    base = load_normalized_squid_instance(synthetic_manifest)
+    path = tmp_path / "asymmetric.png"
+    image = Image.new("RGBA", (8, 8), (0, 0, 0, 0))
+    image.putpixel((6, 1), (255, 0, 0, 255))
+    image.putpixel((1, 6), (0, 255, 0, 255))
+    image.save(path)
+    instance = replace(
+        base,
+        image=replace(base.image, rgba_path=path, width_px=8, height_px=8),
+        geometry=replace(base.geometry, projected_width_px=8, projected_height_px=8),
+    )
+    result = render_observation(
+        instance,
+        SceneState(camera=camera(), target_distance_m=3.0, orientation_deg=90.0),
+    )
+    x, y = result.transform.target_top_left_px
+    rotated = image.rotate(90.0, expand=True, fillcolor=(0, 0, 0, 0))
+    crop = result.squid_layer_rgba.crop((x, y, x + rotated.width, y + rotated.height))
+    assert crop.tobytes() == rotated.tobytes()
+    assert crop.getpixel((1, 1)) == (255, 0, 0, 255)
+    assert crop.getpixel((6, 6)) == (0, 255, 0, 255)
+
+
+def test_fractional_center_and_orientation_are_deterministic(synthetic_manifest: Path) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    scene = SceneState(
+        camera=camera(), center_px=(10.25, 10.5), target_distance_m=3.0, orientation_deg=45.0
+    )
+    first = render_observation(instance, scene)
+    second = render_observation(instance, scene)
+    assert first.transform.target_center_px == (10.25, 10.5)
+    assert first.transform.target_top_left_px == (-126, -126)
+    assert first.transform == second.transform
+    assert first.squid_layer_rgba.tobytes() == second.squid_layer_rgba.tobytes()
 
 
 def test_explicit_center_is_independent_of_camera_raster_resolution(synthetic_manifest: Path) -> None:
@@ -84,16 +226,15 @@ def test_explicit_center_is_independent_of_camera_raster_resolution(synthetic_ma
         image=replace(instance.image, rgba_path=raster_path, width_px=256, height_px=512),
     )
     center = (300.25, 220.75)
-    first = render_observation(
-        instance, SceneState(camera=camera(), target_distance_m=3.0, center_px=center)
-    )
-    second = render_observation(
-        higher_resolution, SceneState(camera=camera(), target_distance_m=3.0, center_px=center)
-    )
+    scene = SceneState(camera=camera(), target_distance_m=3.0, center_px=center, orientation_deg=45.0)
+    first = render_observation(instance, scene)
+    second = render_observation(higher_resolution, scene)
     assert first.transform.target_projected_width_px == second.transform.target_projected_width_px
     assert first.transform.target_projected_height_px == second.transform.target_projected_height_px
     assert first.transform.target_center_px == second.transform.target_center_px
     assert first.transform.target_top_left_px == second.transform.target_top_left_px
+    assert (first.transform.rotated_raster_width_px, first.transform.rotated_raster_height_px) == (272, 272)
+    assert (second.transform.rotated_raster_width_px, second.transform.rotated_raster_height_px) == (272, 272)
     assert first.transform.source_raster_width_px == 128
     assert second.transform.source_raster_width_px == 256
 
@@ -132,15 +273,50 @@ def test_negative_placement_is_clipped_without_repositioning(synthetic_manifest:
     instance = load_normalized_squid_instance(synthetic_manifest)
     result = render_observation(
         instance,
-        SceneState(camera=camera(), target_distance_m=3.0, center_px=(-20.0, -30.0)),
+        SceneState(camera=camera(), target_distance_m=3.0, center_px=(-20.0, -30.0), orientation_deg=45.0),
     )
-    assert result.transform.target_top_left_px == (-84, -158)
+    assert result.transform.target_top_left_px == (-156, -166)
+    assert result.transform.target_center_px == (-20.0, -30.0)
     assert result.squid_layer_rgba.getbbox() is not None
+
+
+def test_rotated_alpha_extends_beyond_unrotated_rectangle(synthetic_manifest: Path) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    center = (512.0, 450.0)
+    result = render_observation(
+        instance,
+        SceneState(camera=camera(), target_distance_m=3.0, center_px=center, orientation_deg=45.0),
+    )
+    unrotated_left = round(center[0] - result.transform.target_projected_width_px / 2)
+    unrotated_top = round(center[1] - result.transform.target_projected_height_px / 2)
+    alpha_bbox = result.squid_layer_rgba.getchannel("A").getbbox()
+    assert alpha_bbox is not None
+    assert alpha_bbox[0] < unrotated_left or alpha_bbox[1] < unrotated_top
+
+
+def test_rotation_does_not_change_scale_or_projected_dimensions(synthetic_manifest: Path) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    unrotated = render_observation(instance, SceneState(camera=camera(), target_distance_m=1.0))
+    rotated = render_observation(
+        instance, SceneState(camera=camera(), target_distance_m=1.0, orientation_deg=90.0)
+    )
+    assert rotated.transform.scale == unrotated.transform.scale
+    assert (
+        rotated.transform.target_projected_width_px,
+        rotated.transform.target_projected_height_px,
+    ) == (384, 768)
+    assert (
+        rotated.transform.rotated_raster_width_px,
+        rotated.transform.rotated_raster_height_px,
+    ) == (768, 384)
+    assert rotated.transform.orientation_deg == 90.0
 
 
 def test_alpha_is_preserved_on_transformed_layer(synthetic_manifest: Path) -> None:
     instance = load_normalized_squid_instance(synthetic_manifest)
     result = render_observation(instance, SceneState(camera=camera(), target_distance_m=3.0))
+    assert result.squid_layer_rgba.mode == "RGBA"
+    assert result.composite_rgba.mode == "RGBA"
     alpha = result.squid_layer_rgba.getchannel("A")
     assert alpha.getextrema() == (0, 255)
 

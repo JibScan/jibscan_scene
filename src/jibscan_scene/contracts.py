@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -83,14 +84,14 @@ class SceneState:
     camera: CameraModel
     target_distance_m: float
     center_px: tuple[float, float] | None = None
-    orientation_deg: float = 0.0
     background_rgba: tuple[int, int, int, int] = (48, 52, 58, 255)
+    orientation_deg: float = 0.0
 
     def __post_init__(self) -> None:
         if self.target_distance_m <= 0:
             raise ValueError("target_distance_m must be > 0")
-        if self.orientation_deg != 0.0:
-            raise NotImplementedError("v0 supports scale + translation only; orientation must remain 0")
+        if not math.isfinite(self.orientation_deg):
+            raise ValueError("orientation_deg must be finite")
 
 
 @dataclass(frozen=True)
@@ -111,6 +112,9 @@ class TransformationMetadata:
     camera: CameraModel
     projection_model: str = "pinhole_fixed_intrinsics_fixed_physical_size"
     renderer_version: str = "jibscan-scene/0.1.0"
+    orientation_deg: float = 0.0
+    rotated_raster_width_px: int = 0
+    rotated_raster_height_px: int = 0
 
 
 @dataclass(frozen=True)

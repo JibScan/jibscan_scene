@@ -31,11 +31,16 @@ def render_observation(instance: NormalizedSquidInstance, scene: SceneState) -> 
     if all(value is not None for value in declared_size) and source_rgba.size != declared_size:
         raise ValueError("RGBA pixel dimensions must match image.width_px/height_px in v0")
 
-    center, top_left = _placement(scene, target_size)
     transformed = source_rgba.resize(target_size, resample=Image.Resampling.LANCZOS)
+    rotated = transformed.rotate(
+        scene.orientation_deg,
+        expand=True,
+        fillcolor=(0, 0, 0, 0),
+    )
 
+    center, top_left = _placement(scene, rotated.size)
     layer = Image.new("RGBA", (scene.camera.width_px, scene.camera.height_px), (0, 0, 0, 0))
-    layer.alpha_composite(transformed, dest=top_left)
+    layer.alpha_composite(rotated, dest=top_left)
 
     composite = Image.new(
         "RGBA", (scene.camera.width_px, scene.camera.height_px), scene.background_rgba
@@ -53,6 +58,9 @@ def render_observation(instance: NormalizedSquidInstance, scene: SceneState) -> 
         scale=scale,
         target_projected_width_px=target_size[0],
         target_projected_height_px=target_size[1],
+        orientation_deg=scene.orientation_deg,
+        rotated_raster_width_px=rotated.width,
+        rotated_raster_height_px=rotated.height,
         target_center_px=center,
         target_top_left_px=top_left,
         vehicle_depth_m=instance.environment.vehicle_depth_m,
