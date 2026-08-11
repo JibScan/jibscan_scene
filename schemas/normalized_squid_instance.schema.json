@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jibscan.org/schemas/normalized_squid_instance/v0.1",
+  "title": "NormalizedSquidInstance",
+  "type": "object",
+  "required": ["instance_id", "image", "geometry", "range", "provenance"],
+  "properties": {
+    "instance_id": {"type": "string", "minLength": 1},
+    "image": {
+      "type": "object",
+      "required": ["rgba_path"],
+      "properties": {
+        "rgba_path": {"type": "string", "minLength": 1},
+        "width_px": {"type": ["integer", "null"], "minimum": 1},
+        "height_px": {"type": ["integer", "null"], "minimum": 1}
+      },
+      "additionalProperties": true
+    },
+    "geometry": {
+      "type": "object",
+      "required": ["projected_width_px", "projected_height_px"],
+      "properties": {
+        "projected_width_px": {"type": "integer", "minimum": 1},
+        "projected_height_px": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": true
+    },
+    "environment": {
+      "type": "object",
+      "properties": {
+        "vehicle_depth_m": {"type": ["number", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "range": {
+      "type": "object",
+      "required": ["subject_distance_m", "method"],
+      "properties": {
+        "subject_distance_m": {"type": "number", "exclusiveMinimum": 0},
+        "method": {"type": "string", "minLength": 1},
+        "confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1}
+      },
+      "additionalProperties": true
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "synthetic_fixture": {"type": "boolean"}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

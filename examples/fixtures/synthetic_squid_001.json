@@ -1,0 +1,24 @@
+{
+  "instance_id": "synthetic:squid:001",
+  "image": {
+    "rgba_path": "synthetic_squid_001.png",
+    "width_px": 128,
+    "height_px": 256
+  },
+  "geometry": {
+    "projected_width_px": 128,
+    "projected_height_px": 256
+  },
+  "environment": {
+    "vehicle_depth_m": 500.0
+  },
+  "range": {
+    "subject_distance_m": 3.0,
+    "method": "synthetic",
+    "confidence": null
+  },
+  "provenance": {
+    "source_sample_id": "synthetic:fixture:001",
+    "synthetic_fixture": true
+  }
+}

@@ -1,15 +1,21 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "jibscan-scene"
-version = "0.0.1"
+version = "0.1.0"
+description = "Deterministic geometry compositor for normalized JibScan squid instances"
+readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["Pillow>=10"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.pytest.ini_options]
+pythonpath = ["src"]
 testpaths = ["tests"]

@@ -1,2 +1,4 @@
-def test_repository_scaffold():
-    assert True
+def test_repository_scaffold() -> None:
+    import jibscan_scene
+
+    assert jibscan_scene.SceneComposer is not None
