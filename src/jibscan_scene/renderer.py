@@ -1,8 +1,19 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from PIL import Image
 
-from .contracts import NormalizedSquidInstance, RenderedObservation, SceneState, TransformationMetadata
+from .contracts import (
+    CameraModel,
+    MultiObjectSceneState,
+    NormalizedSquidInstance,
+    RenderedObservation,
+    RenderedScene,
+    RenderedSceneObject,
+    SceneObject,
+    SceneState,
+    TransformationMetadata,
+)
 from .projection import pinhole_range_scale
 
 
@@ -67,3 +78,73 @@ def render_observation(instance: NormalizedSquidInstance, scene: SceneState) -> 
         camera=scene.camera,
     )
     return RenderedObservation(layer, composite, metadata)
+
+
+def _cameras_match(c1: CameraModel, c2: CameraModel) -> bool:
+    return (
+        c1.fx == c2.fx
+        and c1.fy == c2.fy
+        and c1.cx == c2.cx
+        and c1.cy == c2.cy
+        and c1.width_px == c2.width_px
+        and c1.height_px == c2.height_px
+    )
+
+
+def render_scene(
+    scene: MultiObjectSceneState | Sequence[SceneObject],
+    camera: CameraModel | None = None,
+    background_rgba: tuple[int, int, int, int] | None = None,
+) -> RenderedScene:
+    if isinstance(scene, MultiObjectSceneState):
+        target_camera = scene.camera
+        bg_rgba = scene.background_rgba if background_rgba is None else background_rgba
+        objects = scene.objects
+        if camera is not None and not _cameras_match(camera, target_camera):
+            raise ValueError(
+                f"Explicit camera does not match MultiObjectSceneState camera: {camera} vs {target_camera}"
+            )
+    elif isinstance(scene, (Sequence, list, tuple)):
+        objects = tuple(scene)
+        if camera is not None:
+            target_camera = camera
+        elif len(objects) > 0:
+            target_camera = objects[0].state.camera
+        else:
+            raise ValueError("camera must be provided when rendering an empty sequence of SceneObject")
+        bg_rgba = (48, 52, 58, 255) if background_rgba is None else background_rgba
+    else:
+        raise TypeError(f"Expected MultiObjectSceneState or Sequence[SceneObject], got {type(scene)}")
+
+    seen_ids: set[str] = set()
+    for obj in objects:
+        if not isinstance(obj, SceneObject):
+            raise TypeError(f"Expected SceneObject instance, got {type(obj)}")
+        if obj.object_id in seen_ids:
+            raise ValueError(f"Duplicate object_id found: {obj.object_id!r}")
+        seen_ids.add(obj.object_id)
+        if not _cameras_match(obj.state.camera, target_camera):
+            raise ValueError(
+                f"Camera mismatch for object '{obj.object_id}': object camera does not match scene camera"
+            )
+
+    rendered_objects: list[RenderedSceneObject] = []
+    for idx, obj in enumerate(objects):
+        obs = render_observation(obj.instance, obj.state)
+        rendered_objects.append(
+            RenderedSceneObject(
+                object_id=obj.object_id,
+                source_instance_id=obj.instance.instance_id,
+                z_index=obj.z_index,
+                original_input_index=idx,
+                transform=obs.transform,
+                squid_layer_rgba=obs.squid_layer_rgba,
+            )
+        )
+
+    canvas = Image.new("RGBA", (target_camera.width_px, target_camera.height_px), bg_rgba)
+    sorted_layers = sorted(rendered_objects, key=lambda ro: (ro.z_index, ro.original_input_index))
+    for ro in sorted_layers:
+        canvas.alpha_composite(ro.squid_layer_rgba)
+
+    return RenderedScene(composite_rgba=canvas, objects=tuple(rendered_objects))

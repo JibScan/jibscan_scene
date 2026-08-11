@@ -118,6 +118,55 @@ class TransformationMetadata:
 
 
 @dataclass(frozen=True)
+class SceneObject:
+    object_id: str
+    instance: NormalizedSquidInstance
+    state: SceneState
+    z_index: int | float = 0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.object_id, str) or not self.object_id or not self.object_id.strip():
+            raise ValueError("object_id must be a non-empty string")
+        if (
+            not isinstance(self.z_index, (int, float))
+            or isinstance(self.z_index, bool)
+            or not math.isfinite(self.z_index)
+        ):
+            raise ValueError("z_index must be a finite number")
+
+
+@dataclass(frozen=True)
+class MultiObjectSceneState:
+    camera: CameraModel
+    objects: tuple[SceneObject, ...] = ()
+    background_rgba: tuple[int, int, int, int] = (48, 52, 58, 255)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.objects, tuple):
+            object.__setattr__(self, "objects", tuple(self.objects))
+
+
+@dataclass(frozen=True)
+class RenderedSceneObject:
+    object_id: str
+    source_instance_id: str
+    z_index: int | float
+    original_input_index: int
+    transform: TransformationMetadata
+    squid_layer_rgba: Any
+
+
+@dataclass(frozen=True)
+class RenderedScene:
+    composite_rgba: Any
+    objects: tuple[RenderedSceneObject, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.objects, tuple):
+            object.__setattr__(self, "objects", tuple(self.objects))
+
+
+@dataclass(frozen=True)
 class RenderedObservation:
     squid_layer_rgba: Any
     composite_rgba: Any

@@ -11,11 +11,19 @@ from PIL import Image
 from jibscan_scene.contracts import TransformationMetadata
 from jibscan_scene import (
     CameraModel,
+    MultiObjectSceneState,
+    NormalizedSquidInstance,
+    RenderedObservation,
+    RenderedScene,
+    RenderedSceneObject,
+    SceneObject,
     SceneState,
     load_normalized_squid_instance,
     pinhole_range_scale,
     render_observation,
+    render_scene,
 )
+
 
 
 def camera() -> CameraModel:
@@ -348,3 +356,349 @@ def test_bioflow_generated_asset_can_use_same_boundary(synthetic_manifest: Path)
     result = render_observation(instance, SceneState(camera=camera(), target_distance_m=3.0))
     assert result.transform.source_instance_id == "bioflow:sample:001"
     assert instance.provenance.extra["generator"] == "bioflow"
+
+
+def create_color_squid_instance(
+    base: NormalizedSquidInstance,
+    tmp_path: Path,
+    name: str,
+    color: tuple[int, int, int, int],
+    size: tuple[int, int] = (16, 16),
+) -> NormalizedSquidInstance:
+    path = tmp_path / f"{name}.png"
+    img = Image.new("RGBA", size, color)
+    img.save(path)
+    return replace(
+        base,
+        instance_id=f"test:{name}",
+        image=replace(base.image, rgba_path=path, width_px=size[0], height_px=size[1]),
+        geometry=replace(base.geometry, projected_width_px=size[0], projected_height_px=size[1]),
+    )
+
+
+def test_scene_object_validation(synthetic_manifest: Path) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    state = SceneState(camera=camera(), target_distance_m=3.0)
+
+    # Valid instantiation
+    obj = SceneObject(object_id="squid_1", instance=instance, state=state, z_index=5)
+    assert obj.object_id == "squid_1"
+    assert obj.z_index == 5
+
+    # Empty / whitespace object_id rejection
+    for invalid_id in ("", "   "):
+        with pytest.raises(ValueError, match="object_id"):
+            SceneObject(object_id=invalid_id, instance=instance, state=state)
+
+    # Non-finite or non-numeric z_index rejection
+    for invalid_z in (math.nan, math.inf, -math.inf, True, False, "0"):
+        with pytest.raises(ValueError, match="z_index"):
+            SceneObject(object_id="valid_id", instance=instance, state=state, z_index=invalid_z)
+
+
+def test_multi_object_scene_state_coerces_sequence_to_tuple(synthetic_manifest: Path) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    state = SceneState(camera=camera(), target_distance_m=3.0)
+    obj1 = SceneObject(object_id="s1", instance=instance, state=state, z_index=0)
+    obj2 = SceneObject(object_id="s2", instance=instance, state=state, z_index=1)
+
+    scene = MultiObjectSceneState(camera=camera(), objects=[obj1, obj2])
+    assert isinstance(scene.objects, tuple)
+    assert len(scene.objects) == 2
+
+
+def test_rendered_scene_coerces_objects_to_tuple() -> None:
+    canvas = Image.new("RGBA", (100, 100), (0, 0, 0, 255))
+    ro = RenderedSceneObject(
+        object_id="s1",
+        source_instance_id="inst_1",
+        z_index=0,
+        original_input_index=0,
+        transform=TransformationMetadata(
+            "inst_1", 8, 8, 8, 8, 3.0, 3.0, 1.0, 8, 8, (10.0, 10.0), (6, 6), None, camera()
+        ),
+        squid_layer_rgba=canvas,
+    )
+    rendered = RenderedScene(composite_rgba=canvas, objects=[ro])
+    assert isinstance(rendered.objects, tuple)
+    assert len(rendered.objects) == 1
+
+
+def test_render_scene_rejects_duplicate_object_id(synthetic_manifest: Path) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    state = SceneState(camera=camera(), target_distance_m=3.0)
+    obj1 = SceneObject(object_id="duplicate_id", instance=instance, state=state, z_index=0)
+    obj2 = SceneObject(object_id="duplicate_id", instance=instance, state=state, z_index=1)
+
+    with pytest.raises(ValueError, match="Duplicate object_id"):
+        render_scene([obj1, obj2])
+
+
+def test_render_scene_two_non_overlapping_squids(synthetic_manifest: Path) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    cam = camera()
+    state1 = SceneState(camera=cam, target_distance_m=3.0, center_px=(200.0, 200.0))
+    state2 = SceneState(camera=cam, target_distance_m=3.0, center_px=(800.0, 700.0))
+
+    obj1 = SceneObject(object_id="squid_top_left", instance=instance, state=state1, z_index=0)
+    obj2 = SceneObject(object_id="squid_bottom_right", instance=instance, state=state2, z_index=1)
+
+    scene = MultiObjectSceneState(camera=cam, objects=(obj1, obj2))
+    rendered = render_scene(scene)
+
+    assert len(rendered.objects) == 2
+    assert rendered.composite_rgba.size == (cam.width_px, cam.height_px)
+    assert rendered.objects[0].object_id == "squid_top_left"
+    assert rendered.objects[1].object_id == "squid_bottom_right"
+
+    # Verify both regions contain non-background rendered pixels
+    bg = scene.background_rgba
+    assert rendered.composite_rgba.getpixel((200, 200)) != bg
+    assert rendered.composite_rgba.getpixel((800, 700)) != bg
+
+
+def test_render_scene_explicit_z_order_with_synthetic_overlapping_colored_pixels(
+    synthetic_manifest: Path, tmp_path: Path
+) -> None:
+    base = load_normalized_squid_instance(synthetic_manifest)
+    red_inst = create_color_squid_instance(base, tmp_path, "red", (255, 0, 0, 255), size=(32, 32))
+    blue_inst = create_color_squid_instance(base, tmp_path, "blue", (0, 0, 255, 255), size=(32, 32))
+
+    cam = camera()
+    center = (512.0, 450.0)
+    state_red = SceneState(camera=cam, target_distance_m=3.0, center_px=center)
+    state_blue = SceneState(camera=cam, target_distance_m=3.0, center_px=center)
+
+    # Red z=0, Blue z=1 -> Blue on top
+    obj_red_lower = SceneObject(object_id="red_sq", instance=red_inst, state=state_red, z_index=0)
+    obj_blue_higher = SceneObject(object_id="blue_sq", instance=blue_inst, state=state_blue, z_index=1)
+
+    rendered_blue_top = render_scene([obj_red_lower, obj_blue_higher])
+    assert rendered_blue_top.composite_rgba.getpixel((512, 450)) == (0, 0, 255, 255)
+
+    # Blue z=0, Red z=1 -> Red on top
+    obj_blue_lower = SceneObject(object_id="blue_sq", instance=blue_inst, state=state_blue, z_index=0)
+    obj_red_higher = SceneObject(object_id="red_sq", instance=red_inst, state=state_red, z_index=1)
+
+    rendered_red_top = render_scene([obj_blue_lower, obj_red_higher])
+    assert rendered_red_top.composite_rgba.getpixel((512, 450)) == (255, 0, 0, 255)
+
+
+def test_range_does_not_define_z_order(synthetic_manifest: Path, tmp_path: Path) -> None:
+    base = load_normalized_squid_instance(synthetic_manifest)
+    red_inst = create_color_squid_instance(base, tmp_path, "red", (255, 0, 0, 255), size=(64, 64))
+    blue_inst = create_color_squid_instance(base, tmp_path, "blue", (0, 0, 255, 255), size=(64, 64))
+
+    cam = camera()
+    center = (512.0, 450.0)
+    # Red is physically closer (1.0m) but has lower z_index (0)
+    state_near_red = SceneState(camera=cam, target_distance_m=1.0, center_px=center)
+    # Blue is physically farther (6.0m) but has higher z_index (1)
+    state_far_blue = SceneState(camera=cam, target_distance_m=6.0, center_px=center)
+
+    obj_near_red = SceneObject(object_id="near_red", instance=red_inst, state=state_near_red, z_index=0)
+    obj_far_blue = SceneObject(object_id="far_blue", instance=blue_inst, state=state_far_blue, z_index=1)
+
+    rendered = render_scene([obj_near_red, obj_far_blue])
+    # Far squid with z=1 must win overlap against near squid with z=0
+    assert rendered.composite_rgba.getpixel((512, 450)) == (0, 0, 255, 255)
+
+
+def test_stable_tie_breaking_for_equal_z_index(synthetic_manifest: Path, tmp_path: Path) -> None:
+    base = load_normalized_squid_instance(synthetic_manifest)
+    red_inst = create_color_squid_instance(base, tmp_path, "red", (255, 0, 0, 255), size=(32, 32))
+    blue_inst = create_color_squid_instance(base, tmp_path, "blue", (0, 0, 255, 255), size=(32, 32))
+
+    cam = camera()
+    center = (512.0, 450.0)
+    state_red = SceneState(camera=cam, target_distance_m=3.0, center_px=center)
+    state_blue = SceneState(camera=cam, target_distance_m=3.0, center_px=center)
+
+    obj_red = SceneObject(object_id="red_obj", instance=red_inst, state=state_red, z_index=0)
+    obj_blue = SceneObject(object_id="blue_obj", instance=blue_inst, state=state_blue, z_index=0)
+
+    # Red first (index 0), Blue second (index 1) -> Blue composited on top
+    res1 = render_scene([obj_red, obj_blue])
+    res1_repeat = render_scene([obj_red, obj_blue])
+    assert res1.composite_rgba.getpixel((512, 450)) == (0, 0, 255, 255)
+    assert res1.composite_rgba.tobytes() == res1_repeat.composite_rgba.tobytes()
+    assert res1.objects == res1_repeat.objects
+    assert [ro.original_input_index for ro in res1.objects] == [0, 1]
+
+    # Blue first (index 0), Red second (index 1) -> Red composited on top
+    res2 = render_scene([obj_blue, obj_red])
+    assert res2.composite_rgba.getpixel((512, 450)) == (255, 0, 0, 255)
+    assert [ro.original_input_index for ro in res2.objects] == [0, 1]
+    assert res2.objects[0].object_id == "blue_obj"
+    assert res2.objects[1].object_id == "red_obj"
+
+
+def test_duplicate_source_instance_with_different_states(synthetic_manifest: Path) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    cam = camera()
+
+    state1 = SceneState(camera=cam, target_distance_m=2.0, center_px=(300.0, 300.0), orientation_deg=0.0)
+    state2 = SceneState(camera=cam, target_distance_m=4.0, center_px=(700.0, 600.0), orientation_deg=45.0)
+
+    obj1 = SceneObject(object_id="squid_occ_1", instance=instance, state=state1, z_index=0)
+    obj2 = SceneObject(object_id="squid_occ_2", instance=instance, state=state2, z_index=1)
+
+    rendered = render_scene([obj1, obj2])
+    assert len(rendered.objects) == 2
+    assert rendered.objects[0].source_instance_id == instance.instance_id
+    assert rendered.objects[1].source_instance_id == instance.instance_id
+    assert rendered.objects[0].object_id == "squid_occ_1"
+    assert rendered.objects[1].object_id == "squid_occ_2"
+    assert rendered.objects[0].transform.target_center_px == (300.0, 300.0)
+    assert rendered.objects[1].transform.target_center_px == (700.0, 600.0)
+    assert rendered.objects[0].transform.orientation_deg == 0.0
+    assert rendered.objects[1].transform.orientation_deg == 45.0
+
+
+def test_camera_mismatch_rejection(synthetic_manifest: Path) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    base_cam = camera()
+    base_state = SceneState(camera=base_cam, target_distance_m=3.0)
+    obj_base = SceneObject(object_id="obj_base", instance=instance, state=base_state)
+
+    mismatched_cams = [
+        CameraModel(fx=800.0, fy=900.0, cx=512.0, cy=450.0, width_px=1024, height_px=900),
+        CameraModel(fx=900.0, fy=800.0, cx=512.0, cy=450.0, width_px=1024, height_px=900),
+        CameraModel(fx=900.0, fy=900.0, cx=500.0, cy=450.0, width_px=1024, height_px=900),
+        CameraModel(fx=900.0, fy=900.0, cx=512.0, cy=400.0, width_px=1024, height_px=900),
+        CameraModel(fx=900.0, fy=900.0, cx=512.0, cy=450.0, width_px=800, height_px=900),
+        CameraModel(fx=900.0, fy=900.0, cx=512.0, cy=450.0, width_px=1024, height_px=800),
+    ]
+
+    for mismatch in mismatched_cams:
+        mismatch_state = SceneState(camera=mismatch, target_distance_m=3.0)
+        obj_mismatch = SceneObject(object_id="obj_mismatch", instance=instance, state=mismatch_state)
+        with pytest.raises(ValueError, match="Camera mismatch"):
+            render_scene([obj_base, obj_mismatch])
+
+    # Also check scene camera parameter mismatch
+    scene_state = MultiObjectSceneState(camera=base_cam, objects=(obj_base,))
+    with pytest.raises(ValueError, match="Explicit camera does not match"):
+        render_scene(scene_state, camera=mismatched_cams[0])
+
+
+def test_individual_transform_preservation(synthetic_manifest: Path) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    cam = camera()
+
+    objects = [
+        SceneObject(
+            object_id="s1",
+            instance=instance,
+            state=SceneState(camera=cam, target_distance_m=1.5, center_px=(200.0, 300.0), orientation_deg=-15.0),
+            z_index=2,
+        ),
+        SceneObject(
+            object_id="s2",
+            instance=instance,
+            state=SceneState(camera=cam, target_distance_m=4.5, center_px=(600.0, 500.0), orientation_deg=60.0),
+            z_index=0,
+        ),
+        SceneObject(
+            object_id="s3",
+            instance=instance,
+            state=SceneState(camera=cam, target_distance_m=3.0, center_px=(400.0, 400.0), orientation_deg=0.0),
+            z_index=1,
+        ),
+    ]
+
+    rendered_scene = render_scene(objects)
+    assert len(rendered_scene.objects) == 3
+
+    for idx, (ro, obj) in enumerate(zip(rendered_scene.objects, objects)):
+        standalone = render_observation(obj.instance, obj.state)
+        assert ro.object_id == obj.object_id
+        assert ro.source_instance_id == obj.instance.instance_id
+        assert ro.z_index == obj.z_index
+        assert ro.original_input_index == idx
+        assert ro.transform == standalone.transform
+        assert ro.squid_layer_rgba.tobytes() == standalone.squid_layer_rgba.tobytes()
+
+
+def test_clipping_partially_outside_and_inside(synthetic_manifest: Path) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    cam = camera()
+
+    obj_outside = SceneObject(
+        object_id="outside",
+        instance=instance,
+        state=SceneState(camera=cam, target_distance_m=3.0, center_px=(-20.0, -30.0), orientation_deg=45.0),
+        z_index=0,
+    )
+    obj_inside = SceneObject(
+        object_id="inside",
+        instance=instance,
+        state=SceneState(camera=cam, target_distance_m=3.0, center_px=(512.0, 450.0)),
+        z_index=1,
+    )
+
+    rendered = render_scene([obj_outside, obj_inside])
+    assert rendered.composite_rgba.size == (cam.width_px, cam.height_px)
+    assert rendered.objects[0].transform.target_top_left_px == (-156, -166)
+    assert rendered.objects[0].squid_layer_rgba.getbbox() is not None
+    assert rendered.objects[1].squid_layer_rgba.getbbox() is not None
+
+
+def test_alpha_semantics_transparent_layer_does_not_erase_lower_layer(
+    synthetic_manifest: Path, tmp_path: Path
+) -> None:
+    base = load_normalized_squid_instance(synthetic_manifest)
+
+    # Bottom solid red 64x64
+    red_inst = create_color_squid_instance(base, tmp_path, "red_solid", (255, 0, 0, 255), size=(64, 64))
+
+    # Top layer: 64x64 with blue center (16x16) and transparent boundary
+    top_path = tmp_path / "top_transparent.png"
+    top_img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    for x in range(24, 40):
+        for y in range(24, 40):
+            top_img.putpixel((x, y), (0, 0, 255, 255))
+    top_img.save(top_path)
+    top_inst = replace(
+        base,
+        instance_id="test:top_transparent",
+        image=replace(base.image, rgba_path=top_path, width_px=64, height_px=64),
+        geometry=replace(base.geometry, projected_width_px=64, projected_height_px=64),
+    )
+
+    cam = camera()
+    center = (512.0, 450.0)
+    state_bottom = SceneState(camera=cam, target_distance_m=3.0, center_px=center)
+    state_top = SceneState(camera=cam, target_distance_m=3.0, center_px=center)
+
+    obj_bottom = SceneObject(object_id="bottom_red", instance=red_inst, state=state_bottom, z_index=0)
+    obj_top = SceneObject(object_id="top_trans", instance=top_inst, state=state_top, z_index=1)
+
+    rendered = render_scene([obj_bottom, obj_top])
+
+    # Center is blue from top layer
+    assert rendered.composite_rgba.getpixel((512, 450)) == (0, 0, 255, 255)
+    # Region at (500, 430) is inside red bottom layer footprint but top layer is transparent:
+    # It must remain pure red and NOT be erased to background!
+    assert rendered.composite_rgba.getpixel((500, 430)) == (255, 0, 0, 255)
+
+
+def test_empty_scene_handling() -> None:
+    cam = camera()
+    # 0 objects with MultiObjectSceneState
+    scene = MultiObjectSceneState(camera=cam, objects=(), background_rgba=(48, 52, 58, 255))
+    rendered = render_scene(scene)
+    assert rendered.objects == ()
+    assert rendered.composite_rgba.size == (cam.width_px, cam.height_px)
+    assert rendered.composite_rgba.getpixel((0, 0)) == (48, 52, 58, 255)
+    assert rendered.composite_rgba.getpixel((512, 450)) == (48, 52, 58, 255)
+
+    # 0 objects with empty sequence and explicit camera
+    custom_bg = (10, 20, 30, 255)
+    rendered_empty_seq = render_scene([], camera=cam, background_rgba=custom_bg)
+    assert rendered_empty_seq.objects == ()
+    assert rendered_empty_seq.composite_rgba.getpixel((0, 0)) == custom_bg
+
+    # 0 objects with empty sequence without camera raises ValueError
+    with pytest.raises(ValueError, match="camera must be provided"):
+        render_scene([])
