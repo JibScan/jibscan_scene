@@ -53,6 +53,8 @@ scale = source_subject_distance_m / target_subject_distance_m
 
 Assumptions: fixed intrinsics, fixed physical dimensions, fixed orientation, no perspective shape change beyond uniform scale, no occlusion change, and no water-optics transformation.
 
+Placement uses `SceneState.center_px` as the requested projected squid center in camera pixels. If omitted, it defaults to the camera principal point. Rasterization uses Python's built-in `round` (ties to even) for `round(center_x - width / 2)` and the corresponding y expression, so the rasterized center is within 0.5 px per axis of the requested center. Placement is never clamped or repositioned; out-of-frame pixels are clipped.
+
 ## Run
 
 ```bash
@@ -73,7 +75,7 @@ and written to `artifacts/range_comparison.png`.
 
 ## Provenance
 
-Every render records source instance ID, source projected dimensions, source range, target range, scale, target projected dimensions, placement, vehicle depth, projection model, and renderer version. The source instance is immutable and is never overwritten by a rendered observation.
+Every render records source instance ID, source raster and projected dimensions, source range, target range, scale, target projected dimensions, requested `target_center_px`, rasterized `target_top_left_px`, vehicle depth, camera, projection model, and renderer version. The source instance is immutable and is never overwritten by a rendered observation.
 
 ## Known limitations
 

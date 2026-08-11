@@ -82,7 +82,7 @@ class CameraModel:
 class SceneState:
     camera: CameraModel
     target_distance_m: float
-    position_px: tuple[int, int] | None = None
+    center_px: tuple[float, float] | None = None
     orientation_deg: float = 0.0
     background_rgba: tuple[int, int, int, int] = (48, 52, 58, 255)
 
@@ -96,6 +96,8 @@ class SceneState:
 @dataclass(frozen=True)
 class TransformationMetadata:
     source_instance_id: str
+    source_raster_width_px: int
+    source_raster_height_px: int
     source_projected_width_px: int
     source_projected_height_px: int
     source_distance_m: float
@@ -103,7 +105,8 @@ class TransformationMetadata:
     scale: float
     target_projected_width_px: int
     target_projected_height_px: int
-    target_position_px: tuple[int, int]
+    target_center_px: tuple[float, float]
+    target_top_left_px: tuple[int, int]
     vehicle_depth_m: float | None
     camera: CameraModel
     projection_model: str = "pinhole_fixed_intrinsics_fixed_physical_size"

@@ -16,13 +16,19 @@ def main() -> None:
 
     instance = load_normalized_squid_instance(args.fixture)
     camera = CameraModel(fx=900.0, fy=900.0, cx=512.0, cy=450.0, width_px=1024, height_px=900)
+    center = (camera.cx, camera.cy)
     targets = [("FAR 6.0 m", 6.0), ("SOURCE 3.0 m", 3.0), ("NEAR 1.0 m", 1.0)]
 
     panels = []
     for label, distance in targets:
-        result = render_observation(instance, SceneState(camera=camera, target_distance_m=distance))
+        result = render_observation(
+            instance, SceneState(camera=camera, target_distance_m=distance, center_px=center)
+        )
         panel = result.composite_rgba.copy()
         draw = ImageDraw.Draw(panel)
+        x, y = center
+        draw.line((x - 10, y, x + 10, y), fill=(255, 255, 0, 255), width=1)
+        draw.line((x, y - 10, x, y + 10), fill=(255, 255, 0, 255), width=1)
         draw.rectangle((0, 0, 260, 38), fill=(0, 0, 0, 180))
         draw.text((12, 11), f"{label}  scale={result.transform.scale:g}x", fill="white")
         panels.append(panel)

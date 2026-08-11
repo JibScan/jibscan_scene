@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from PIL import Image
@@ -47,7 +48,94 @@ def test_rendered_dimensions_follow_uniform_scale(synthetic_manifest: Path) -> N
 def test_default_placement_centers_on_camera_principal_point(synthetic_manifest: Path) -> None:
     instance = load_normalized_squid_instance(synthetic_manifest)
     result = render_observation(instance, SceneState(camera=camera(), target_distance_m=3.0))
-    assert result.transform.target_position_px == (448, 322)
+    assert result.transform.target_center_px == (512.0, 450.0)
+    assert result.transform.target_top_left_px == (448, 322)
+
+
+def test_explicit_center_is_invariant_across_ranges(synthetic_manifest: Path) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    center = (700.25, 120.75)
+    results = [
+        render_observation(
+            instance,
+            SceneState(camera=camera(), target_distance_m=distance, center_px=center),
+        )
+        for distance in (1.0, 3.0, 6.0)
+    ]
+    assert [result.transform.target_center_px for result in results] == [center] * 3
+
+
+def test_explicit_center_controls_target_top_left(synthetic_manifest: Path) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    result = render_observation(
+        instance,
+        SceneState(camera=camera(), target_distance_m=3.0, center_px=(700.25, 120.75)),
+    )
+    assert result.transform.target_top_left_px == (636, -7)
+
+
+def test_explicit_center_is_independent_of_camera_raster_resolution(synthetic_manifest: Path) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    raster_path = synthetic_manifest.parent / "higher_resolution_squid.png"
+    with Image.open(instance.image.rgba_path) as source:
+        source.resize((256, 512), resample=Image.Resampling.NEAREST).save(raster_path)
+    higher_resolution = replace(
+        instance,
+        image=replace(instance.image, rgba_path=raster_path, width_px=256, height_px=512),
+    )
+    center = (300.25, 220.75)
+    first = render_observation(
+        instance, SceneState(camera=camera(), target_distance_m=3.0, center_px=center)
+    )
+    second = render_observation(
+        higher_resolution, SceneState(camera=camera(), target_distance_m=3.0, center_px=center)
+    )
+    assert first.transform.target_projected_width_px == second.transform.target_projected_width_px
+    assert first.transform.target_projected_height_px == second.transform.target_projected_height_px
+    assert first.transform.target_center_px == second.transform.target_center_px
+    assert first.transform.target_top_left_px == second.transform.target_top_left_px
+    assert first.transform.source_raster_width_px == 128
+    assert second.transform.source_raster_width_px == 256
+
+
+def test_vehicle_depth_does_not_change_render_geometry(synthetic_manifest: Path) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    changed = instance.__class__(
+        instance_id=instance.instance_id,
+        image=instance.image,
+        geometry=instance.geometry,
+        environment=instance.environment.__class__(vehicle_depth_m=12.0),
+        range=instance.range,
+        provenance=instance.provenance,
+    )
+    scene = SceneState(camera=camera(), target_distance_m=3.0, center_px=(500.5, 300.5))
+    first = render_observation(instance, scene)
+    second = render_observation(changed, scene)
+    assert first.squid_layer_rgba.tobytes() == second.squid_layer_rgba.tobytes()
+    assert first.transform.target_top_left_px == second.transform.target_top_left_px
+    assert first.transform.vehicle_depth_m == 500.0
+    assert second.transform.vehicle_depth_m == 12.0
+
+
+def test_fractional_odd_size_uses_python_round_for_rasterization(synthetic_manifest: Path) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    scene = SceneState(camera=camera(), target_distance_m=384 / 127, center_px=(10.25, 10.5))
+    first = render_observation(instance, scene)
+    second = render_observation(instance, scene)
+    assert (first.transform.target_projected_width_px, first.transform.target_projected_height_px) == (127, 254)
+    assert first.transform.target_top_left_px == (round(10.25 - 127 / 2), round(10.5 - 254 / 2))
+    assert first.transform == second.transform
+    assert first.squid_layer_rgba.tobytes() == second.squid_layer_rgba.tobytes()
+
+
+def test_negative_placement_is_clipped_without_repositioning(synthetic_manifest: Path) -> None:
+    instance = load_normalized_squid_instance(synthetic_manifest)
+    result = render_observation(
+        instance,
+        SceneState(camera=camera(), target_distance_m=3.0, center_px=(-20.0, -30.0)),
+    )
+    assert result.transform.target_top_left_px == (-84, -158)
+    assert result.squid_layer_rgba.getbbox() is not None
 
 
 def test_alpha_is_preserved_on_transformed_layer(synthetic_manifest: Path) -> None:
