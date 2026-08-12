@@ -140,6 +140,8 @@ class MultiObjectSceneState:
     camera: CameraModel
     objects: tuple[SceneObject, ...] = ()
     background_rgba: tuple[int, int, int, int] = (48, 52, 58, 255)
+    scene_id: str | None = None
+    manifest_path: Path | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.objects, tuple):

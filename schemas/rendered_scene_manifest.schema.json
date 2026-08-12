@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jibscan.org/schemas/rendered_scene_manifest/v0.1",
+  "title": "RenderedSceneManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "scene_id", "image", "camera", "background", "objects", "renderer"],
+  "properties": {
+    "schema_version": {"const": "jibscan.rendered_scene/v0.1"},
+    "scene_id": {"type": "string", "minLength": 1},
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rgba_path", "width_px", "height_px"],
+      "properties": {
+        "rgba_path": {"type": "string", "minLength": 1},
+        "width_px": {"type": "integer", "minimum": 1},
+        "height_px": {"type": "integer", "minimum": 1}
+      }
+    },
+    "camera": {"$ref": "#/$defs/camera"},
+    "background": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rgba"],
+      "properties": {
+        "rgba": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "prefixItems": [
+            {"type": "integer", "minimum": 0, "maximum": 255},
+            {"type": "integer", "minimum": 0, "maximum": 255},
+            {"type": "integer", "minimum": 0, "maximum": 255},
+            {"type": "integer", "minimum": 0, "maximum": 255}
+          ],
+          "items": false
+        }
+      }
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["object_id", "source_instance_id", "z_index", "original_input_index", "transform"],
+        "properties": {
+          "object_id": {"type": "string"},
+          "source_instance_id": {"type": "string"},
+          "z_index": {"type": "number"},
+          "original_input_index": {"type": "integer", "minimum": 0},
+          "transform": {"$ref": "#/$defs/transform"}
+        }
+      }
+    },
+    "renderer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implementation", "version"],
+      "properties": {"implementation": {"type": "string"}, "version": {"type": "string"}}
+    }
+  },
+  "$defs": {
+    "camera": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fx", "fy", "cx", "cy", "width_px", "height_px"],
+      "properties": {
+        "fx": {"type": "number", "exclusiveMinimum": 0}, "fy": {"type": "number", "exclusiveMinimum": 0},
+        "cx": {"type": "number"}, "cy": {"type": "number"},
+        "width_px": {"type": "integer", "minimum": 1}, "height_px": {"type": "integer", "minimum": 1}
+      }
+    },
+    "transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_raster_width_px", "source_raster_height_px", "source_projected_width_px",
+        "source_projected_height_px", "source_distance_m", "target_distance_m", "scale",
+        "target_projected_width_px", "target_projected_height_px", "orientation_deg",
+        "rotated_raster_width_px", "rotated_raster_height_px", "target_center_px",
+        "target_top_left_px", "vehicle_depth_m", "camera", "projection_model", "renderer_version"
+      ],
+      "properties": {
+        "source_raster_width_px": {"type": "integer", "minimum": 1}, "source_raster_height_px": {"type": "integer", "minimum": 1},
+        "source_projected_width_px": {"type": "integer", "minimum": 1}, "source_projected_height_px": {"type": "integer", "minimum": 1},
+        "source_distance_m": {"type": "number", "exclusiveMinimum": 0}, "target_distance_m": {"type": "number", "exclusiveMinimum": 0}, "scale": {"type": "number", "exclusiveMinimum": 0},
+        "target_projected_width_px": {"type": "integer", "minimum": 1}, "target_projected_height_px": {"type": "integer", "minimum": 1},
+        "orientation_deg": {"type": "number"}, "rotated_raster_width_px": {"type": "integer", "minimum": 1},
+        "rotated_raster_height_px": {"type": "integer", "minimum": 1},
+        "target_center_px": {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{"type": "number"}, {"type": "number"}], "items": false},
+        "target_top_left_px": {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{"type": "integer"}, {"type": "integer"}], "items": false}, "vehicle_depth_m": {"type": ["number", "null"]},
+        "camera": {"$ref": "#/$defs/camera"}, "projection_model": {"type": "string"}, "renderer_version": {"type": "string"}
+      }
+    }
+  }
+}

@@ -65,7 +65,28 @@ pytest
 python scripts/generate_synthetic_fixture.py
 python scripts/render_range_comparison.py
 python scripts/render_orientation_comparison.py
+python scripts/compose_scene.py examples/scenes/synthetic_multi_squid.json --output-dir artifacts/example_scene
 ```
+
+## File-based scene boundary
+
+`ManifestSceneComposer().compose(scene_manifest_path, output_dir)` is the public
+file-based entrypoint. A SceneManifest uses `jibscan.scene/v0.1`, keeps the
+camera and background global, and references upstream normalized-instance JSON
+manifests by path. Relative references resolve from the SceneManifest's
+directory, never from the caller's working directory.
+
+The composer writes deterministic `<safe-scene-id>.png` and
+`<safe-scene-id>.json` files. The safe stem replaces every run of characters
+outside `[A-Za-z0-9_-]` with `_`, strips leading/trailing `_`, and uses
+`scene` when empty. Output paths in the rendered manifest are relative to the
+output directory. The output contract is `jibscan.rendered_scene/v0.1` and
+contains JSON-native camera, object ordering, z-index, and full transform
+provenance only; it does not expose internal PIL images.
+
+`RenderedScene` still retains one full-canvas RGBA layer per object internally
+for the existing renderer. This is a known O(objects × canvas) memory limit;
+the file boundary exports only the final composite and provenance.
 
 The comparison is generated as:
 

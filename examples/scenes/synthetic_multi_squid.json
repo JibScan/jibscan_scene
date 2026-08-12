@@ -1,0 +1,45 @@
+{
+  "schema_version": "jibscan.scene/v0.1",
+  "scene_id": "scene:synthetic:001",
+  "camera": {
+    "fx": 900.0,
+    "fy": 900.0,
+    "cx": 512.0,
+    "cy": 450.0,
+    "width_px": 1024,
+    "height_px": 900
+  },
+  "background": {"rgba": [48, 52, 58, 255]},
+  "objects": [
+    {
+      "object_id": "scene:squid:left",
+      "instance_manifest": "../fixtures/synthetic_squid_001.json",
+      "target": {
+        "subject_distance_m": 3.0,
+        "center_px": [300.0, 450.0],
+        "orientation_deg": -20.0
+      },
+      "z_index": 0
+    },
+    {
+      "object_id": "scene:squid:center",
+      "instance_manifest": "../fixtures/synthetic_squid_001.json",
+      "target": {
+        "subject_distance_m": 6.0,
+        "center_px": [512.0, 450.0],
+        "orientation_deg": 0.0
+      },
+      "z_index": 2
+    },
+    {
+      "object_id": "scene:squid:right",
+      "instance_manifest": "../fixtures/synthetic_squid_001.json",
+      "target": {
+        "subject_distance_m": 2.0,
+        "center_px": [760.0, 450.0],
+        "orientation_deg": 35.0
+      },
+      "z_index": 1
+    }
+  ]
+}
