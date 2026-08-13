@@ -18,6 +18,7 @@ from jibscan_scene import (
     SceneObject,
     SceneState,
     load_scene_manifest,
+    load_scene_manifest_v2,
     render_scene,
 )
 
@@ -294,3 +295,72 @@ def test_legacy_protocol_and_manifest_entrypoint_surfaces_are_distinct() -> None
     manifest_parameters = list(inspect.signature(ManifestSceneComposer.compose).parameters)
     assert legacy_parameters == ["self", "organism", "scene_condition", "output_dir"]
     assert manifest_parameters == ["self", "scene_manifest_path", "output_dir"]
+
+
+def test_v02_scene_manifest_schema_and_runtime_agreement(synthetic_manifest: Path, tmp_path: Path) -> None:
+    schema = _schema("scene_manifest_v0.2.schema.json")
+    validator = Draft202012Validator(schema)
+
+    base_payload = {
+        "schema_version": "jibscan.scene/v0.2",
+        "scene_id": "scene:v02:test",
+        "camera": {"fx": 10.0, "fy": 10.0, "cx": 8.0, "cy": 8.0, "width_px": 16, "height_px": 16},
+        "background": {"rgba": [48, 52, 58, 255]},
+        "objects": [
+            {
+                "object_id": "obj1",
+                "instance_manifest": str(synthetic_manifest.resolve()),
+                "target": {"subject_distance_m": 3.0, "center_px": [8.0, 8.0]},
+                "z_index": 0,
+            }
+        ],
+    }
+
+    # Valid: constant + positive range_m
+    valid_constant = json.loads(json.dumps(base_payload))
+    valid_constant["background"]["policy"] = "constant"
+    valid_constant["background"]["range_m"] = 10.0
+    validator.validate(valid_constant)
+    p_const = tmp_path / "valid_constant.json"
+    p_const.write_text(json.dumps(valid_constant), encoding="utf-8")
+    loaded_const = load_scene_manifest_v2(p_const)
+    assert loaded_const.scene_id == "scene:v02:test"
+
+    # Valid: invalid + no range_m
+    valid_invalid = json.loads(json.dumps(base_payload))
+    valid_invalid["background"]["policy"] = "invalid"
+    validator.validate(valid_invalid)
+    p_inv = tmp_path / "valid_invalid.json"
+    p_inv.write_text(json.dumps(valid_invalid), encoding="utf-8")
+    loaded_inv = load_scene_manifest_v2(p_inv)
+    assert loaded_inv.scene_id == "scene:v02:test"
+
+    # Invalid: constant + missing range_m
+    invalid_const_no_range = json.loads(json.dumps(base_payload))
+    invalid_const_no_range["background"]["policy"] = "constant"
+    assert list(validator.iter_errors(invalid_const_no_range))
+    p_err1 = tmp_path / "invalid_const_no_range.json"
+    p_err1.write_text(json.dumps(invalid_const_no_range), encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_scene_manifest_v2(p_err1)
+
+    # Invalid: invalid + supplied range_m
+    invalid_inv_with_range = json.loads(json.dumps(base_payload))
+    invalid_inv_with_range["background"]["policy"] = "invalid"
+    invalid_inv_with_range["background"]["range_m"] = 10.0
+    assert list(validator.iter_errors(invalid_inv_with_range))
+    p_err2 = tmp_path / "invalid_inv_with_range.json"
+    p_err2.write_text(json.dumps(invalid_inv_with_range), encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_scene_manifest_v2(p_err2)
+
+    # Invalid: constant + zero or negative range_m
+    for bad_range in [0.0, -5.0]:
+        invalid_const_bad_range = json.loads(json.dumps(base_payload))
+        invalid_const_bad_range["background"]["policy"] = "constant"
+        invalid_const_bad_range["background"]["range_m"] = bad_range
+        assert list(validator.iter_errors(invalid_const_bad_range))
+        p_err3 = tmp_path / f"invalid_const_bad_range_{bad_range}.json"
+        p_err3.write_text(json.dumps(invalid_const_bad_range), encoding="utf-8")
+        with pytest.raises(ValueError):
+            load_scene_manifest_v2(p_err3)

@@ -8,9 +8,12 @@ from typing import Any
 
 from . import loader, renderer
 from .contracts import CameraModel, MultiObjectSceneState, SceneObject, SceneState
+from .geometry import GEOMETRY_SCHEMA_VERSION, write_geometry_sidecar
 
 SCENE_SCHEMA_VERSION = "jibscan.scene/v0.1"
+SCENE_SCHEMA_VERSION_V2 = "jibscan.scene/v0.2"
 RENDERED_SCENE_SCHEMA_VERSION = "jibscan.rendered_scene/v0.1"
+RENDERED_SCENE_SCHEMA_VERSION_V2 = "jibscan.rendered_scene/v0.2"
 RENDERER_VERSION = "jibscan-scene/0.1.0"
 
 
@@ -117,6 +120,10 @@ def load_scene_manifest(path: str | Path) -> MultiObjectSceneState:
     version = _string(_required(data, "schema_version", "$"), "$.schema_version")
     if version != SCENE_SCHEMA_VERSION:
         raise _error("$.schema_version", f"must equal {SCENE_SCHEMA_VERSION!r}")
+    return _load_scene_data(data, manifest_path)
+
+
+def _load_scene_data(data: dict[str, Any], manifest_path: Path) -> MultiObjectSceneState:
     scene_id = _string(_required(data, "scene_id", "$"), "$.scene_id")
     camera = _camera(_required(data, "camera", "$"))
     background = _object(_required(data, "background", "$"), "background")
@@ -134,6 +141,28 @@ def load_scene_manifest(path: str | Path) -> MultiObjectSceneState:
         scene_id=scene_id,
         manifest_path=manifest_path,
     )
+
+
+def _background_policy(value: Any, path: str) -> str:
+    if value not in {"constant", "invalid"}:
+        raise _error(path, "must be one of 'constant' or 'invalid'")
+    return value
+
+
+def load_scene_manifest_v2(path: str | Path) -> MultiObjectSceneState:
+    manifest_path = Path(path).resolve()
+    data = _object(json.loads(manifest_path.read_text(encoding="utf-8")), "$")
+    version = _string(_required(data, "schema_version", "$"), "$.schema_version")
+    if version != SCENE_SCHEMA_VERSION_V2:
+        raise _error("$.schema_version", f"must equal {SCENE_SCHEMA_VERSION_V2!r}")
+    background = _object(_required(data, "background", "$"), "background")
+    policy = _background_policy(_required(background, "policy", "background"), "$.background.policy")
+    range_m = background.get("range_m")
+    if policy == "constant":
+        _number(_required(background, "range_m", "background"), "background.range_m", positive=True)
+    elif range_m is not None:
+        raise _error("background.range_m", "is only allowed for constant background policy")
+    return _load_scene_data(data, manifest_path)
 
 
 def _camera_metadata(camera: CameraModel) -> dict[str, Any]:
@@ -216,10 +245,121 @@ class ManifestSceneComposer:
         )
         return metadata
 
+    def compose_with_geometry(
+        self,
+        scene_manifest_path: str | Path,
+        output_dir: str | Path,
+        *,
+        background_policy: str | None = None,
+        background_range_m: float | None = None,
+    ) -> dict[str, Any]:
+        manifest_path = Path(scene_manifest_path).resolve()
+        data = _object(json.loads(manifest_path.read_text(encoding="utf-8")), "$")
+        version = _string(_required(data, "schema_version", "$"), "$.schema_version")
+        if version == SCENE_SCHEMA_VERSION:
+            policy = _background_policy(background_policy or "invalid", "background_policy")
+            if policy == "constant" and background_range_m is None:
+                raise _error("background_range_m", "is required for constant background policy")
+            scene = load_scene_manifest(manifest_path)
+        elif version == SCENE_SCHEMA_VERSION_V2:
+            background = _object(_required(data, "background", "$"), "background")
+            policy = _background_policy(
+                _required(background, "policy", "background"), "$.background.policy"
+            )
+            manifest_range_m = background.get("range_m")
+            if policy == "constant":
+                manifest_range_m = _number(
+                    _required(background, "range_m", "background"), "background.range_m", positive=True
+                )
+            elif manifest_range_m is not None:
+                raise _error("background.range_m", "is only allowed for constant background policy")
+            if background_policy is not None and _background_policy(background_policy, "background_policy") != policy:
+                raise _error("background_policy", "does not match the scene manifest policy")
+            if background_range_m is not None and background_range_m != manifest_range_m:
+                raise _error("background_range_m", "does not match the scene manifest range")
+            background_range_m = manifest_range_m
+            scene = load_scene_manifest_v2(manifest_path)
+        else:
+            raise _error("$.schema_version", "geometry composition requires scene/v0.1 or scene/v0.2")
+
+        rendered = renderer.render_scene(scene)
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        stem = _safe_scene_name(scene.scene_id or "scene")
+        image_name = f"{stem}.png"
+        manifest_name = f"{stem}.json"
+        rendered.composite_rgba.save(output_path / image_name, format="PNG")
+        sidecar = write_geometry_sidecar(
+            rendered,
+            output_path,
+            stem,
+            scene_id=scene.scene_id,
+            background_rgba=scene.background_rgba,
+            background_policy=policy,
+            background_range_m=background_range_m,
+            rendered_manifest_name=manifest_name,
+        )
+        metadata: dict[str, Any] = {
+            "schema_version": RENDERED_SCENE_SCHEMA_VERSION_V2,
+            "scene_id": scene.scene_id,
+            "image": {
+                "rgba_path": image_name,
+                "width_px": rendered.composite_rgba.width,
+                "height_px": rendered.composite_rgba.height,
+                "format": "PNG",
+                "dtype": "uint8",
+                "color_space": "sRGB",
+                "alpha_mode": "straight",
+                "channel_range": [0, 255],
+            },
+            "camera": _camera_metadata(scene.camera),
+            "background": {
+                "rgba": list(scene.background_rgba),
+                "policy": policy,
+                **({"range_m": float(background_range_m)} if policy == "constant" else {}),
+            },
+            "objects": [
+                {
+                    "object_id": obj.object_id,
+                    "source_instance_id": obj.source_instance_id,
+                    "z_index": obj.z_index,
+                    "original_input_index": obj.original_input_index,
+                    "transform": _transform_metadata(obj.transform),
+                }
+                for obj in rendered.objects
+            ],
+            "geometry_manifest_path": sidecar["path"],
+            "renderer": {"implementation": "jibscan_scene", "version": RENDERER_VERSION},
+        }
+        (output_path / manifest_name).write_text(
+            json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        return metadata
+
+
+def compose_with_geometry(
+    scene_manifest_path: str | Path,
+    output_dir: str | Path,
+    *,
+    background_policy: str | None = None,
+    background_range_m: float | None = None,
+) -> dict[str, Any]:
+    return ManifestSceneComposer().compose_with_geometry(
+        scene_manifest_path,
+        output_dir,
+        background_policy=background_policy,
+        background_range_m=background_range_m,
+    )
+
 
 __all__ = [
+    "GEOMETRY_SCHEMA_VERSION",
     "ManifestSceneComposer",
+    "compose_with_geometry",
     "RENDERED_SCENE_SCHEMA_VERSION",
+    "RENDERED_SCENE_SCHEMA_VERSION_V2",
     "SCENE_SCHEMA_VERSION",
+    "SCENE_SCHEMA_VERSION_V2",
     "load_scene_manifest",
+    "load_scene_manifest_v2",
 ]

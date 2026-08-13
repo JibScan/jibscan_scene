@@ -84,6 +84,23 @@ output directory. The output contract is `jibscan.rendered_scene/v0.1` and
 contains JSON-native camera, object ordering, z-index, and full transform
 provenance only; it does not expose internal PIL images.
 
+`ManifestSceneComposer().compose_with_geometry(...)` is the explicit Wave 8
+adapter. It preserves the v0.1 call and writes a
+`jibscan.rendered_scene/v0.2` manifest plus a `jibscan.scene_geometry/v0.1`
+sidecar. The sidecar stores pixel-aligned float32 metric ranges in meters,
+int32 occurrence labels, uint8 validity, and uint8 alpha-union coverage.
+Visible object ranges use each occurrence's `target_distance_m`; `z_index`
+only selects the composited visible occurrence and `vehicle_depth_m` never
+enters a range map. Legacy v0.1 scenes default to an invalid background
+range. A v0.2 scene may declare a positive constant background range with
+`background.policy: "constant"` and `background.range_m`, or explicitly use
+`background.policy: "invalid"`.
+
+The single-visible-surface representation reports
+`representation.exact_for_current_scene` and limitations. Partial-alpha
+mixtures at different declared ranges are retained as an approximation and
+are not treated as physical radiance.
+
 `RenderedScene` still retains one full-canvas RGBA layer per object internally
 for the existing renderer. This is a known O(objects × canvas) memory limit;
 the file boundary exports only the final composite and provenance.

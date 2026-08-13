@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jibscan.org/schemas/scene_manifest/v0.2",
+  "title": "SceneManifestV2",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "scene_id", "camera", "background", "objects"],
+  "properties": {
+    "schema_version": {"const": "jibscan.scene/v0.2"},
+    "scene_id": {"type": "string", "minLength": 1},
+    "camera": {"$ref": "#/$defs/camera"},
+    "background": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["rgba", "policy"],
+      "properties": {
+        "policy": {"enum": ["constant", "invalid"]},
+        "range_m": {"type": "number", "exclusiveMinimum": 0},
+        "rgba": {"$ref": "#/$defs/rgba"}
+      },
+      "if": {
+        "properties": {"policy": {"const": "constant"}},
+        "required": ["policy"]
+      },
+      "then": {
+        "required": ["range_m"]
+      },
+      "else": {
+        "not": {"required": ["range_m"]}
+      }
+    },
+    "objects": {"type": "array", "items": {"type": "object", "additionalProperties": true, "required": ["object_id", "instance_manifest", "target", "z_index"], "properties": {"object_id": {"type": "string", "minLength": 1}, "instance_manifest": {"type": "string", "minLength": 1}, "target": {"type": "object", "additionalProperties": true, "required": ["subject_distance_m", "center_px"], "properties": {"subject_distance_m": {"type": "number", "exclusiveMinimum": 0}, "center_px": {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{"type": "number"}, {"type": "number"}], "items": false}, "orientation_deg": {"type": "number"}}}, "z_index": {"type": "number"}}}}
+  },
+  "$defs": {
+    "camera": {"type": "object", "additionalProperties": true, "required": ["fx", "fy", "cx", "cy", "width_px", "height_px"], "properties": {"fx": {"type": "number", "exclusiveMinimum": 0}, "fy": {"type": "number", "exclusiveMinimum": 0}, "cx": {"type": "number"}, "cy": {"type": "number"}, "width_px": {"type": "integer", "minimum": 1}, "height_px": {"type": "integer", "minimum": 1}}},
+    "rgba": {"type": "array", "minItems": 4, "maxItems": 4, "prefixItems": [{"type": "integer", "minimum": 0, "maximum": 255}, {"type": "integer", "minimum": 0, "maximum": 255}, {"type": "integer", "minimum": 0, "maximum": 255}, {"type": "integer", "minimum": 0, "maximum": 255}], "items": false}
+  }
+}

@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jibscan.org/schemas/scene_geometry/v0.1",
+  "title": "SceneGeometrySidecar",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "scene_id", "rendered_scene_manifest", "raster", "image", "background", "background_range", "maps", "visibility_labels", "exactness", "representation"],
+  "properties": {
+    "schema_version": {"const": "jibscan.scene_geometry/v0.1"},
+    "scene_id": {"type": ["string", "null"]},
+    "rendered_scene_manifest": {"type": "string", "minLength": 1},
+    "raster": {"$ref": "#/$defs/raster"},
+    "image": {"$ref": "#/$defs/image"},
+    "background": {
+      "type": "object", "additionalProperties": false, "required": ["policy", "rgba"],
+      "properties": {"policy": {"enum": ["constant", "invalid"]}, "rgba": {"$ref": "#/$defs/rgba"}}
+    },
+    "background_range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["range_mode"],
+      "properties": {
+        "range_mode": {"enum": ["constant", "invalid"]},
+        "range_m": {"type": "number", "exclusiveMinimum": 0}
+      },
+      "if": {
+        "properties": {"range_mode": {"const": "constant"}},
+        "required": ["range_mode"]
+      },
+      "then": {
+        "required": ["range_m"]
+      },
+      "else": {
+        "not": {"required": ["range_m"]}
+      }
+    },
+    "maps": {
+      "type": "object", "additionalProperties": false, "required": ["range_m", "visibility", "validity", "coverage"],
+      "properties": {
+        "range_m": {"$ref": "#/$defs/range_map"},
+        "visibility": {"$ref": "#/$defs/visibility_map"},
+        "validity": {"$ref": "#/$defs/byte_map"},
+        "coverage": {"$ref": "#/$defs/byte_map"}
+      }
+    },
+    "visibility_labels": {"type": "object", "additionalProperties": {"$ref": "#/$defs/visibility_label"}},
+    "exactness": {
+      "type": "object", "additionalProperties": false,
+      "required": ["range_map_exact_pixels", "partial_alpha_multi_range_pixels", "range_map_limitation"],
+      "properties": {
+        "range_map_exact_pixels": {"type": "integer", "minimum": 0},
+        "partial_alpha_multi_range_pixels": {"type": "integer", "minimum": 0},
+        "range_map_limitation": {"type": "string", "minLength": 1}
+      }
+    },
+    "representation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["surface_model", "alpha_policy", "exact_for_current_scene", "limitations"],
+      "properties": {
+        "surface_model": {"const": "single_visible_surface"},
+        "alpha_policy": {"type": "string", "minLength": 1},
+        "exact_for_current_scene": {"type": "boolean"},
+        "limitations": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "path": {"type": "string", "minLength": 1}
+  },
+  "$defs": {
+    "rgba": {
+      "type": "array", "minItems": 4, "maxItems": 4,
+      "prefixItems": [
+        {"type": "integer", "minimum": 0, "maximum": 255},
+        {"type": "integer", "minimum": 0, "maximum": 255},
+        {"type": "integer", "minimum": 0, "maximum": 255},
+        {"type": "integer", "minimum": 0, "maximum": 255}
+      ], "items": false
+    },
+    "image": {
+      "type": "object", "additionalProperties": false,
+      "required": ["format", "dtype", "color_space", "alpha_mode", "channel_range", "width_px", "height_px"],
+      "properties": {
+        "format": {"const": "PNG"}, "dtype": {"const": "uint8"}, "color_space": {"const": "sRGB"}, "alpha_mode": {"const": "straight"}, "channel_range": {"const": [0, 255]},
+        "width_px": {"type": "integer", "minimum": 1}, "height_px": {"type": "integer", "minimum": 1}
+      }
+    },
+    "map": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "format", "dtype", "shape", "semantics"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1}, "format": {"enum": ["npy", "PNG"]},
+        "dtype": {"type": "string", "minLength": 1},
+        "shape": {"type": "array", "prefixItems": [{"type": "integer", "minimum": 1}, {"type": "integer", "minimum": 1}], "items": false},
+        "semantics": {"type": "string", "minLength": 1}, "invalid_value": {"type": "string"}, "units": {"type": "string"}, "representation": {"type": "string"}
+      }
+    },
+    "raster": {
+      "type": "object", "additionalProperties": false, "required": ["width_px", "height_px"],
+      "properties": {"width_px": {"type": "integer", "minimum": 1}, "height_px": {"type": "integer", "minimum": 1}}
+    },
+    "range_map": {
+      "allOf": [
+        {"$ref": "#/$defs/map"},
+        {"properties": {"format": {"const": "npy"}, "dtype": {"const": "<f4"}, "units": {"const": "m"}, "representation": {"const": "metric_range"}, "invalid_value": {"const": "NaN"}}}
+      ]
+    },
+    "visibility_map": {
+      "allOf": [{"$ref": "#/$defs/map"}, {"properties": {"format": {"const": "npy"}, "dtype": {"const": "<i4"}}}]
+    },
+    "byte_map": {
+      "allOf": [{"$ref": "#/$defs/map"}, {"properties": {"format": {"const": "PNG"}, "dtype": {"const": "uint8"}}}]
+    },
+    "visibility_label": {
+      "type": "object", "additionalProperties": false,
+      "required": ["label", "object_id", "occurrence_index"],
+      "properties": {
+        "label": {"type": "string", "minLength": 1}, "object_id": {"type": ["string", "null"]},
+        "occurrence_index": {"type": ["integer", "null"], "minimum": 0}, "source_instance_id": {"type": "string"},
+        "target_distance_m": {"type": "number", "exclusiveMinimum": 0}
+      }
+    }
+  }
+}
